@@ -83,10 +83,14 @@ export default function App() {
   const [isDbsyncing, setIsDbsyncing] = useState(false);
 
   // Personalization settings state
-  const [userProfile, setUserProfile] = useState({
-    fullName: 'Jane Operator',
-    email: 'jane@sandbox.com',
-    orgName: 'Sandbox Corp'
+  const [userProfile, setUserProfile] = useState(() => {
+    const saved = localStorage.getItem('geolzen_profile');
+    if (saved) return JSON.parse(saved);
+    return {
+      fullName: '',
+      email: '',
+      orgName: ''
+    };
   });
 
   // Settings tab sub-view
@@ -175,6 +179,7 @@ export default function App() {
   useEffect(() => {
     setEditFullName(userProfile.fullName);
     setEditOrgName(userProfile.orgName);
+    localStorage.setItem('geolzen_profile', JSON.stringify(userProfile));
   }, [userProfile]);
 
   // Autoscroll terminal
