@@ -321,18 +321,27 @@ export default function App() {
 
           if (error) throw error;
           
-          setAuthMessage({ type: 'success', text: 'Sign up successful! Please check your email for confirmation.' });
-          
-          setTimeout(() => {
-            setUserProfile({
-              fullName: authFullNameInput || 'Security Operator',
-              email: authEmailInput,
-              orgName: authOrgInput || 'Sandbox Corp'
-            });
-            localStorage.setItem('geolzen_auth', 'true');
-            setIsAuthenticated(true);
-            setShowAuthGate(false);
-          }, 2000);
+          if (data.session) {
+            setAuthMessage({ type: 'success', text: 'Sign up successful! Logging you in...' });
+            setTimeout(() => {
+              setUserProfile({
+                fullName: authFullNameInput || 'Security Operator',
+                email: authEmailInput,
+                orgName: authOrgInput || 'Sandbox Corp'
+              });
+              localStorage.setItem('geolzen_auth', 'true');
+              setIsAuthenticated(true);
+              setShowAuthGate(false);
+            }, 2000);
+          } else {
+            setAuthMessage({ type: 'success', text: 'Sign up successful! Please check your email to confirm your account.' });
+            setTimeout(() => {
+              setAuthMode('login');
+              setAuthMessage(null);
+              setAuthLoading(false);
+            }, 5000);
+            return; // Exit early so we don't clear loading state immediately
+          }
 
         } else {
           const { data, error } = await supabaseClient.auth.signInWithPassword({
