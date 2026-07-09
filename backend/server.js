@@ -473,7 +473,7 @@ app.post('/api/vulnerabilities/:id/chat', async (req, res) => {
 });
 
 // ── Start Server ────────────────────────────────────────────────
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`[GEOLZEN] Control Plane API listening on http://localhost:${PORT}`);
     console.log(`[GEOLZEN] Supabase: ${supabase ? 'CONNECTED' : 'SANDBOX MODE'}`);
