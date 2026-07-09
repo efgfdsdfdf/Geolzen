@@ -305,14 +305,23 @@ export default function App() {
   const selectedTarget = targets.find(t => t.id === selectedTargetId) || targets[0];
   const selectedVuln = selectedTarget?.vulnerabilities.find(v => v.id === selectedVulnId);
 
-  // On Mount: Check local storage for Supabase credentials & load if present
+  // On Mount: Check .env variables first, then local storage for Supabase credentials & load if present
   useEffect(() => {
-    const savedUrl = localStorage.getItem('geolzen_supabase_url');
-    const savedKey = localStorage.getItem('geolzen_supabase_anon_key');
-    if (savedUrl && savedKey) {
-      setSupabaseUrl(savedUrl);
-      setSupabaseAnonKey(savedKey);
-      initSupabaseClient(savedUrl, savedKey);
+    const envUrl = import.meta.env.VITE_SUPABASE_URL;
+    const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    
+    if (envUrl && envKey) {
+      setSupabaseUrl(envUrl);
+      setSupabaseAnonKey(envKey);
+      initSupabaseClient(envUrl, envKey);
+    } else {
+      const savedUrl = localStorage.getItem('geolzen_supabase_url');
+      const savedKey = localStorage.getItem('geolzen_supabase_anon_key');
+      if (savedUrl && savedKey) {
+        setSupabaseUrl(savedUrl);
+        setSupabaseAnonKey(savedKey);
+        initSupabaseClient(savedUrl, savedKey);
+      }
     }
   }, []);
 
