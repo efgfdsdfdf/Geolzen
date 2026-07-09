@@ -315,8 +315,12 @@ app.get('/api/auth/github/callback', async (req, res) => {
     }
 
     // Check if the user has access to the repository
-    // target.name should be in format "owner/repo" or just "repo"
-    const repoName = target.name;
+    // target.name might be "owner/repo", "repo", or a full URL "github.com/owner/repo"
+    let repoName = target.name.replace(/^(https?:\/\/)?(www\.)?github\.com\//, '').trim();
+    
+    // Remove any trailing slashes
+    repoName = repoName.replace(/\/$/, '');
+
     const repoUrl = repoName.includes('/') 
       ? `https://api.github.com/repos/${repoName}`
       : `https://api.github.com/repos/${githubUser.login}/${repoName}`;
