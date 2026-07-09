@@ -172,23 +172,71 @@ app.post('/api/targets/:id/verify', async (req, res) => {
             recordsRead: txtRecords.map(r => r.data).join(', ') || 'No TXT records found'
           });
         }
-      } else {
-        // OAuth or file-based verification
-        const { data: updated, error: updateErr } = await supabase
-          .from('targets')
-          .update({ verified: true, verification_method: verificationMethod })
-          .eq('id', id)
-          .select();
+      } else if (verificationMethod === 'file' && target.type === 'domain') {
+        // Meta file verification: fetch /.well-known/securescan-verify.txt
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10000);
 
-        if (updateErr) throw updateErr;
-        return res.json({ success: true, target: updated[0] });
+          const fileUrl = `https://${target.name}/.well-known/securescan-verify.txt`;
+          const fileResponse = await fetch(fileUrl, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'Geolzen-Verification/1.0' }
+          });
+
+          clearTimeout(timeout);
+
+          if (!fileResponse.ok) {
+            return res.status(400).json({
+              success: false,
+              message: `Could not fetch verification file at ${fileUrl}. HTTP status: ${fileResponse.status}. Please ensure the file is publicly accessible.`
+            });
+          }
+
+          const fileContent = await fileResponse.text();
+          const tokenFound = fileContent.trim().includes(target.verification_token);
+
+          if (tokenFound) {
+            const { data: updated, error: updateErr } = await supabase
+              .from('targets')
+              .update({ verified: true, verification_method: 'file' })
+              .eq('id', id)
+              .select();
+
+            if (updateErr) throw updateErr;
+            return res.json({ success: true, target: updated[0] });
+          } else {
+            return res.status(400).json({
+              success: false,
+              message: `The file at ${fileUrl} was found but does not contain the expected token "${target.verification_token}".`,
+              contentPreview: fileContent.substring(0, 200)
+            });
+          }
+        } catch (fetchErr) {
+          if (fetchErr.name === 'AbortError') {
+            return res.status(400).json({
+              success: false,
+              message: `Timed out after 10 seconds trying to reach https://${target.name}/.well-known/securescan-verify.txt`
+            });
+          }
+          return res.status(400).json({
+            success: false,
+            message: `Failed to reach verification file: ${fetchErr.message}. Please check that https://${target.name}/.well-known/securescan-verify.txt is publicly accessible.`
+          });
+        }
+      } else {
+        // OAuth verification — not applicable without a real OAuth flow
+        return res.status(400).json({
+          success: false,
+          message: 'Unsupported verification method. Use DNS TXT or meta file verification for domains.'
+        });
       }
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
   }
 
-  return res.json({ success: true, target: { id, verified: true, verification_method: verificationMethod } });
+  return res.status(400).json({ success: false, message: 'Verification requires a database connection. Please configure Supabase environment variables.' });
 });
 
 // ── Rules of Engagement Signature ───────────────────────────────

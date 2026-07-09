@@ -602,75 +602,24 @@ export default function App() {
     setVerificationMethod(newTargetType === 'domain' ? 'dns' : 'oauth');
   };
 
-  const performActualVerification = () => {
+  const performActualVerification = async () => {
     if (!activeVerifyTarget) return;
     setIsVerifying(true);
     setRealDnsVerifyResponse(null);
 
-    if (verificationMethod === 'dns' && activeVerifyTarget.type === 'domain') {
-      const targetName = activeVerifyTarget.name;
-      const expectedToken = activeVerifyTarget.verificationToken;
-      const targetId = activeVerifyTarget.id;
-      
-      fetch(`https://cloudflare-dns.com/dns-query?name=${targetName}&type=TXT`, {
-        headers: { 'Accept': 'application/dns-json' }
-      })
-      .then(res => res.json())
-      .then(async (data) => {
-        const answers = data.Answer || [];
-        const txtRecords = answers.filter(a => a.type === 16);
+    const targetId = activeVerifyTarget.id;
 
-        const found = txtRecords.some(rec => {
-          const content = rec.data.replace(/"/g, '');
-          return content.includes(expectedToken);
-        });
-
-        if (found) {
-          if (supabaseClient) {
-            await supabaseClient
-              .from('targets')
-              .update({ verified: true, verification_method: verificationMethod })
-              .eq('id', targetId);
-          }
-
-          setTargets(prev => prev.map(t => {
-            if (t.id === targetId) {
-              return { ...t, verified: true, verificationMethod };
-            }
-            return t;
-          }));
-          setIsVerifying(false);
-          
-          const updatedTarget = { ...activeVerifyTarget, verified: true, verificationMethod };
-          setActiveVerifyTarget(null);
-          setLegalTarget(updatedTarget);
-          setShowLegalModal(true);
-        } else {
-          setIsVerifying(false);
-          setRealDnsVerifyResponse({
-            success: false,
-            message: `TXT record containing "${expectedToken}" was not found on nameservers for ${targetName}.`,
-            recordsFound: txtRecords.map(r => r.data).join(', ') || 'No TXT records found'
-          });
-        }
-      })
-      .catch(err => {
-        setIsVerifying(false);
-        setRealDnsVerifyResponse({
-          success: false,
-          message: `Network error querying Cloudflare DNS Nameservers: ${err.message}`
-        });
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/targets/${targetId}/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verificationMethod })
       });
-    } else {
-      const targetId = activeVerifyTarget.id;
-      setTimeout(async () => {
-        if (supabaseClient) {
-          await supabaseClient
-            .from('targets')
-            .update({ verified: true, verification_method: verificationMethod })
-            .eq('id', targetId);
-        }
 
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        // Backend confirmed verification passed
         setTargets(prev => prev.map(t => {
           if (t.id === targetId) {
             return { ...t, verified: true, verificationMethod };
@@ -678,12 +627,26 @@ export default function App() {
           return t;
         }));
         setIsVerifying(false);
-        
+
         const updatedTarget = { ...activeVerifyTarget, verified: true, verificationMethod };
         setActiveVerifyTarget(null);
         setLegalTarget(updatedTarget);
         setShowLegalModal(true);
-      }, 1500);
+      } else {
+        // Backend said verification failed
+        setIsVerifying(false);
+        setRealDnsVerifyResponse({
+          success: false,
+          message: result.message || result.error || 'Verification failed. Please check your configuration and try again.',
+          recordsFound: result.recordsRead || result.contentPreview || ''
+        });
+      }
+    } catch (err) {
+      setIsVerifying(false);
+      setRealDnsVerifyResponse({
+        success: false,
+        message: `Network error contacting verification server: ${err.message}`
+      });
     }
   };
 
