@@ -18,6 +18,8 @@ const { scanHeaders } = require('../scanners/headerScanner');
 const { scanSSL } = require('../scanners/sslScanner');
 const { scanDNS } = require('../scanners/dnsScanner');
 const { scanDependencies } = require('../scanners/depScanner');
+const { scanPorts } = require('../scanners/portScanner');
+const { scanCMS } = require('../scanners/cmsScanner');
 
 /**
  * Execute a full scan pipeline against a verified target
@@ -197,6 +199,31 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
       }
     }
 
+    // ── Step 4.5: Active Port & Service Discovery ─────────────
+    if (targetType === 'domain') {
+      log(`[NETWORK] Probing management and database ports at ${targetName}...`);
+      try {
+        const portResult = await scanPorts(targetName);
+        scanMetadata.scanners.ports = portResult.metadata;
+
+        if (portResult.metadata.error) {
+          log(`[WARNING] Port probe issue: ${portResult.metadata.error}`);
+        } else {
+          log(`[NETWORK] Scanned ${portResult.metadata.portsScanned} ports. Found ${portResult.metadata.openPorts} open ports.`);
+        }
+
+        if (portResult.findings.length > 0) {
+          for (const finding of portResult.findings) {
+            log(`[NETWORK] [CRITICAL] ${finding.title}`);
+          }
+          allFindings.push(...portResult.findings);
+        }
+      } catch (err) {
+        log(`[ERROR] Port scanner failed: ${err.message}`);
+        scanMetadata.errors.push({ scanner: 'ports', error: err.message });
+      }
+    }
+
     // ── Step 5: Dependency Vulnerability Scan ─────────────────
     log('[SCA] Checking for dependency vulnerabilities via OSV.dev intelligence feed...');
 
@@ -264,6 +291,35 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
     } catch (err) {
       log(`[ERROR] Dependency scanner failed: ${err.message}`);
       scanMetadata.errors.push({ scanner: 'dependencies', error: err.message });
+    }
+
+    // ── Step 5.5: Application Layer (CMS) Scan ────────────────
+    if (targetType === 'domain') {
+      const targetUrl = `https://${targetName}`;
+      log(`[DAST] Crawling application layer for CMS vulnerabilities at ${targetUrl}...`);
+      try {
+        const cmsResult = await scanCMS(targetUrl);
+        scanMetadata.scanners.cms = cmsResult.metadata;
+
+        if (cmsResult.metadata.error) {
+          log(`[WARNING] CMS probe issue: ${cmsResult.metadata.error}`);
+        }
+
+        if (cmsResult.findings.length > 0) {
+          for (const finding of cmsResult.findings) {
+            const severityTag = finding.severity === 'critical' ? '[CRITICAL]' :
+                                finding.severity === 'high' ? '[HIGH]' :
+                                finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
+            log(`[DAST] ${severityTag} ${finding.title}`);
+          }
+          allFindings.push(...cmsResult.findings);
+        } else {
+          log('[DAST] No exposed CMS admin panels or version disclosures found.');
+        }
+      } catch (err) {
+        log(`[ERROR] CMS scanner failed: ${err.message}`);
+        scanMetadata.errors.push({ scanner: 'cms', error: err.message });
+      }
     }
 
     // ── Step 6: Aggregate and Persist ─────────────────────────
