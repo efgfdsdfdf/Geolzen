@@ -55,8 +55,8 @@ function GithubIcon({ size = 20, color = "currentColor", ...props }) {
   );
 }
 
-// Backend API URL
-const BACKEND_URL = 'http://localhost:5000';
+// Backend API URL (Automatically routes to Vercel Serverless Functions in production)
+const BACKEND_URL = import.meta.env.PROD ? '' : 'http://localhost:5000';
 
 // Mock Initial Targets
 const INITIAL_TARGETS = [
