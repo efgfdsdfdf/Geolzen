@@ -473,8 +473,12 @@ app.post('/api/vulnerabilities/:id/chat', async (req, res) => {
 });
 
 // ── Start Server ────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[GEOLZEN] Control Plane API listening on http://localhost:${PORT}`);
-  console.log(`[GEOLZEN] Supabase: ${supabase ? 'CONNECTED' : 'SANDBOX MODE'}`);
-  console.log(`[GEOLZEN] Scanner modules loaded: header, ssl, dns, dependency`);
-});
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`[GEOLZEN] Control Plane API listening on http://localhost:${PORT}`);
+    console.log(`[GEOLZEN] Supabase: ${supabase ? 'CONNECTED' : 'SANDBOX MODE'}`);
+    console.log(`[GEOLZEN] Scanner modules loaded: header, ssl, dns, dependency`);
+  });
+}
+
+module.exports = app;
