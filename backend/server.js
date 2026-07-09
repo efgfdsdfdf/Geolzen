@@ -639,10 +639,74 @@ app.post('/api/vulnerabilities/:id/chat', async (req, res) => {
   return res.status(201).json({ id: `msg-${Date.now()}`, vulnerability_id: id, sender, message });
 });
 
-// ── Start Server ────────────────────────────────────────────────
+// ── Paystack Integration ──────────────────────────────────────────
+const crypto = require('crypto');
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+
+// Verify a payment directly from the frontend
+app.post('/api/payments/verify', async (req, res) => {
+  const { reference, plan, organization_id } = req.body;
+  if (!PAYSTACK_SECRET_KEY) {
+    return res.status(500).json({ error: 'Paystack is not configured on the backend.' });
+  }
+
+  try {
+    const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`
+      }
+    });
+    const data = await response.json();
+
+    if (data.status && data.data.status === 'success') {
+      // Payment verified! Update the database
+      if (supabase && organization_id) {
+        await supabase
+          .from('organizations')
+          .update({
+            plan_tier: plan,
+            paystack_customer_id: data.data.customer.customer_code,
+            subscription_status: 'active'
+          })
+          .eq('id', organization_id);
+      }
+      return res.json({ success: true, message: 'Payment verified successfully', data: data.data });
+    } else {
+      return res.status(400).json({ success: false, message: 'Payment verification failed' });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Paystack Webhook for recurring payments or asynchronous events
+app.post('/api/webhooks/paystack', (req, res) => {
+  if (!PAYSTACK_SECRET_KEY) return res.sendStatus(400);
+
+  // Validate event
+  const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY).update(JSON.stringify(req.body)).digest('hex');
+  if (hash !== req.headers['x-paystack-signature']) {
+    return res.sendStatus(400);
+  }
+
+  const event = req.body;
+
+  if (event.event === 'charge.success') {
+    // A successful charge was made (could be initial or recurring)
+    const customerCode = event.data.customer.customer_code;
+    const planId = event.data.plan;
+    
+    // In a real implementation, you'd map planId to your 'starter' or 'team' string
+    // and update the organization's plan_tier where paystack_customer_id = customerCode.
+  }
+
+  res.sendStatus(200);
+});
+
+// ── Server Start ────────────────────────────────────────────────
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
-    console.log(`[GEOLZEN] Control Plane API listening on http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[GEOLZEN] Control Plane API listening on http://0.0.0.0:${PORT}`);
     console.log(`[GEOLZEN] Supabase: ${supabase ? 'CONNECTED' : 'SANDBOX MODE'}`);
     console.log(`[GEOLZEN] Scanner modules loaded: header, ssl, dns, dependency`);
   });
