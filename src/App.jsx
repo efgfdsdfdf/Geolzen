@@ -163,12 +163,17 @@ export default function App() {
   const [orgData, setOrgData] = useState(null);
   const [paystackConfig, setPaystackConfig] = useState(null);
 
+  // Use an exchange rate (e.g., $1 = 1500 NGN) to convert the USD price to Naira
+  // This allows Nigerian Naira cards to work, while foreign banks will auto-convert it.
+  const exchangeRate = 1500;
+  const amountInNaira = paystackConfig?.amount ? (paystackConfig.amount * exchangeRate) : 0;
+
   const initializePayment = usePaystackPayment({
     reference: (new Date()).getTime().toString(),
     email: session?.user?.email || "user@geolzen.com",
-    amount: paystackConfig?.amount ? paystackConfig.amount * 100 : 0,
+    amount: amountInNaira * 100, // Paystack expects lowest currency unit (Kobo)
     publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_test_dummy',
-    currency: 'USD'
+    currency: 'NGN'
   });
 
   useEffect(() => {
