@@ -171,7 +171,7 @@ export default function App() {
 
   const initializePayment = usePaystackPayment({
     reference: (new Date()).getTime().toString(),
-    email: session?.user?.email || "user@geolzen.com",
+    email: userProfile?.email || "user@geolzen.com",
     amount: amountInNaira * 100, // Paystack expects lowest currency unit (Kobo)
     publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_test_dummy',
     currency: 'NGN'
@@ -202,7 +202,7 @@ export default function App() {
   }, [paystackConfig]);
 
   const handleCheckout = (plan, amount) => {
-    if (!session) {
+    if (!isAuthenticated) {
       setAuthMode('signup');
       setShowAuthGate(true);
       return;
