@@ -407,7 +407,7 @@ app.post('/api/targets/:id/sign-roe', async (req, res) => {
 // Launch a real scan pipeline (async — returns immediately with job ID)
 app.post('/api/targets/:id/scan', async (req, res) => {
   const { id } = req.params;
-  const { scanType } = req.body;
+  const { scanType, tier, userEmail, sendEmailAlerts } = req.body;
 
   // Pre-flight compliance checks
   if (supabase) {
@@ -463,6 +463,9 @@ app.post('/api/targets/:id/scan', async (req, res) => {
     supabase,
     targetId: id,
     scanType: scanType || 'passive',
+    tier: tier || 'free',
+    userEmail: userEmail || 'user@geolzen.com',
+    sendEmailAlerts: sendEmailAlerts !== false,
     onLog: (msg) => {
       const entry = { timestamp: new Date().toISOString(), message: msg };
       scanLogs.push(entry);

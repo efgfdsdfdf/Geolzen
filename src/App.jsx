@@ -803,7 +803,12 @@ export default function App() {
       const response = await fetch(`${BACKEND_URL}/api/targets/${selectedTarget.id}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scanType: scanTypeSelection })
+        body: JSON.stringify({ 
+          scanType: scanTypeSelection,
+          tier: userTier,
+          userEmail: userProfile?.email || 'user@geolzen.com',
+          sendEmailAlerts: enableEmailAlerts
+        })
       });
 
       const data = await response.json();

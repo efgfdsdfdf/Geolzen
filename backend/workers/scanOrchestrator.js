@@ -20,17 +20,20 @@ const { scanDNS } = require('../scanners/dnsScanner');
 const { scanDependencies } = require('../scanners/depScanner');
 const { scanPorts } = require('../scanners/portScanner');
 const { scanCMS } = require('../scanners/cmsScanner');
+const { sendVulnerabilityAlert } = require('../utils/mailer');
 
 /**
  * Execute a full scan pipeline against a verified target
  * @param {object} params
  * @param {object} params.supabase - Supabase client instance
  * @param {string} params.targetId - Target ID from database
- * @param {string} params.scanType - 'passive' or 'active'
+ * @param {string} params.tier - Subscription tier (free, starter, team)
+ * @param {string} params.userEmail - User's email for alerts
+ * @param {boolean} params.sendEmailAlerts - Whether to send emails
  * @param {function} params.onLog - Callback for real-time log streaming
  * @returns {Promise<object>} - Aggregated scan results
  */
-async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
+async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free', userEmail, sendEmailAlerts = true, onLog }) {
   const log = onLog || ((msg) => console.log(`[SCAN] ${msg}`));
   const allFindings = [];
   const scanMetadata = {
@@ -137,32 +140,35 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
 
     // ── Step 3: SSL/TLS Certificate Analysis ──────────────────
     if (targetType === 'domain') {
-      log(`[SECURITY] Analyzing SSL/TLS certificate for ${targetName}:443...`);
+      if (tier === 'free') {
+        log('[INFO] SSL/TLS Scanning is locked on the Free tier. Upgrade to Starter or Team to unlock.');
+      } else {
+        log(`[SECURITY] Analyzing SSL/TLS certificate for ${targetName}:443...`);
 
-      try {
-        const sslResult = await scanSSL(targetName);
-        scanMetadata.scanners.ssl = sslResult.metadata;
+        try {
+          const sslResult = await scanSSL(targetName);
+          scanMetadata.scanners.ssl = sslResult.metadata;
 
-        if (sslResult.metadata.certificate) {
-          const cert = sslResult.metadata.certificate;
-          log(`[SECURITY] Certificate Issuer: ${cert.issuer}`);
-          log(`[SECURITY] Valid Until: ${cert.validTo}`);
-          log(`[SECURITY] Protocol: ${cert.protocol || 'Unknown'}`);
-          log(`[SECURITY] Authorized: ${cert.authorized ? 'YES (Trusted CA)' : 'NO (Untrusted)'}`);
+          if (sslResult.metadata.certificate) {
+            const cert = sslResult.metadata.certificate;
+            log(`[SECURITY] Certificate Issuer: ${cert.issuer}`);
+            log(`[SECURITY] Valid Until: ${cert.validTo}`);
+            log(`[SECURITY] Protocol: ${cert.protocol || 'Unknown'}`);
+            log(`[SECURITY] Authorized: ${cert.authorized ? 'YES (Trusted CA)' : 'NO (Untrusted)'}`);
+          }
+
+          if (sslResult.metadata.error) {
+            log(`[WARNING] SSL probe issue: ${sslResult.metadata.error}`);
+          }
+
+          if (sslResult.findings.length > 0) {
+            log(`[SECURITY] SSL/TLS analysis isolated ${sslResult.findings.length} finding(s)`);
+            allFindings.push(...sslResult.findings);
+          }
+        } catch (err) {
+          log(`[ERROR] SSL scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'ssl', error: err.message });
         }
-
-        if (sslResult.metadata.error) {
-          log(`[WARNING] SSL probe issue: ${sslResult.metadata.error}`);
-        }
-
-        if (sslResult.findings.length > 0) {
-          log(`[SECURITY] SSL/TLS analysis isolated ${sslResult.findings.length} finding(s)`);
-          allFindings.push(...sslResult.findings);
-        }
-
-      } catch (err) {
-        log(`[ERROR] SSL scanner failed: ${err.message}`);
-        scanMetadata.errors.push({ scanner: 'ssl', error: err.message });
       }
     }
 
@@ -201,8 +207,11 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
 
     // ── Step 4.5: Active Port & Service Discovery ─────────────
     if (targetType === 'domain') {
-      log(`[NETWORK] Probing management and database ports at ${targetName}...`);
-      try {
+      if (tier !== 'team') {
+        log('[INFO] Active Port Probing is locked on your current tier. Upgrade to Team to unlock deep network scans.');
+      } else {
+        log(`[NETWORK] Probing management and database ports at ${targetName}...`);
+        try {
         const portResult = await scanPorts(targetName);
         scanMetadata.scanners.ports = portResult.metadata;
 
@@ -223,11 +232,15 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
         scanMetadata.errors.push({ scanner: 'ports', error: err.message });
       }
     }
+    }
 
     // ── Step 5: Dependency Vulnerability Scan ─────────────────
-    log('[SCA] Checking for dependency vulnerabilities via OSV.dev intelligence feed...');
+    if (tier === 'free') {
+      log('[INFO] Dependency Vulnerability Audits are locked on the Free tier. Upgrade to Starter to unlock.');
+    } else {
+      log('[SCA] Checking for dependency vulnerabilities via OSV.dev intelligence feed...');
 
-    try {
+      try {
       // For repository targets, we could scan the actual repo path
       // For domain targets, attempt to fetch package.json if exposed
       let packageJson = null;
@@ -288,16 +301,20 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
         log('[SCA] No exposed dependency manifests detected (this is expected and secure).');
       }
 
-    } catch (err) {
-      log(`[ERROR] Dependency scanner failed: ${err.message}`);
-      scanMetadata.errors.push({ scanner: 'dependencies', error: err.message });
+      } catch (err) {
+        log(`[ERROR] Dependency scanner failed: ${err.message}`);
+        scanMetadata.errors.push({ scanner: 'dependencies', error: err.message });
+      }
     }
 
     // ── Step 5.5: Application Layer (CMS) Scan ────────────────
     if (targetType === 'domain') {
-      const targetUrl = `https://${targetName}`;
-      log(`[DAST] Crawling application layer for CMS vulnerabilities at ${targetUrl}...`);
-      try {
+      if (tier !== 'team') {
+        log('[INFO] Deep CMS & App Layer scanning is locked on your current tier. Upgrade to Team to unlock.');
+      } else {
+        const targetUrl = `https://${targetName}`;
+        log(`[DAST] Crawling application layer for CMS vulnerabilities at ${targetUrl}...`);
+        try {
         const cmsResult = await scanCMS(targetUrl);
         scanMetadata.scanners.cms = cmsResult.metadata;
 
@@ -316,9 +333,10 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
         } else {
           log('[DAST] No exposed CMS admin panels or version disclosures found.');
         }
-      } catch (err) {
-        log(`[ERROR] CMS scanner failed: ${err.message}`);
-        scanMetadata.errors.push({ scanner: 'cms', error: err.message });
+        } catch (err) {
+          log(`[ERROR] CMS scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'cms', error: err.message });
+        }
       }
     }
 
@@ -386,6 +404,17 @@ async function executeScanPipeline({ supabase, targetId, scanType, onLog }) {
 
     log(`[INFO] SCAN COMPLETED SUCCESSFULLY. ${uniqueFindings.length} vulnerabilities isolated.`);
     log(`[INFO] Breakdown — Critical: ${counts.critical} | High: ${counts.high} | Medium: ${counts.medium} | Low: ${counts.low}`);
+
+    // Trigger Email Alerts
+    if (sendEmailAlerts && uniqueFindings.length > 0) {
+      try {
+        log(`[INFO] Preparing security alert email for ${userEmail}...`);
+        const url = await sendVulnerabilityAlert(userEmail, targetName, uniqueFindings);
+        log(`[MAILER] ✅ Security alert successfully sent! View it here: ${url}`);
+      } catch (err) {
+        log(`[ERROR] Failed to send email alert: ${err.message}`);
+      }
+    }
 
     // Update job status
     if (supabase && jobId) {
