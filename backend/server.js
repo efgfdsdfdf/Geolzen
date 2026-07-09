@@ -38,6 +38,11 @@ if (supabaseUrl && (supabaseServiceKey || supabaseAnonKey)) {
 // Track active scans for SSE streaming
 const activeScans = new Map();
 
+// GitHub OAuth Config
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
 // ── Health Check ────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({
@@ -237,6 +242,114 @@ app.post('/api/targets/:id/verify', async (req, res) => {
   }
 
   return res.status(400).json({ success: false, message: 'Verification requires a database connection. Please configure Supabase environment variables.' });
+});
+
+// ── GitHub OAuth Flow ───────────────────────────────────────────
+
+// Step 1: Redirect user to GitHub authorization page
+app.get('/api/auth/github', (req, res) => {
+  const { targetId } = req.query;
+  if (!GITHUB_CLIENT_ID) {
+    return res.status(500).json({ error: 'GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables.' });
+  }
+
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+  const state = targetId || '';
+  const githubUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo&state=${encodeURIComponent(state)}`;
+
+  res.redirect(githubUrl);
+});
+
+// Step 2: Handle GitHub callback, verify repo ownership
+app.get('/api/auth/github/callback', async (req, res) => {
+  const { code, state: targetId } = req.query;
+
+  if (!code) {
+    return res.redirect(`${FRONTEND_URL}?github_error=no_code`);
+  }
+
+  try {
+    // Exchange code for access token
+    const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code
+      })
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (tokenData.error || !tokenData.access_token) {
+      return res.redirect(`${FRONTEND_URL}?github_error=${encodeURIComponent(tokenData.error_description || 'token_exchange_failed')}`);
+    }
+
+    const accessToken = tokenData.access_token;
+
+    // Fetch the authenticated GitHub user
+    const userResponse = await fetch('https://api.github.com/user', {
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'User-Agent': 'Geolzen-App' }
+    });
+    const githubUser = await userResponse.json();
+
+    if (!targetId || !supabase) {
+      return res.redirect(`${FRONTEND_URL}?github_error=missing_target_or_db`);
+    }
+
+    // Get target from database
+    const { data: target, error: targetErr } = await supabase
+      .from('targets')
+      .select('*')
+      .eq('id', targetId)
+      .single();
+
+    if (targetErr || !target) {
+      return res.redirect(`${FRONTEND_URL}?github_error=target_not_found`);
+    }
+
+    // Check if the user has access to the repository
+    // target.name should be in format "owner/repo" or just "repo"
+    const repoName = target.name;
+    const repoUrl = repoName.includes('/') 
+      ? `https://api.github.com/repos/${repoName}`
+      : `https://api.github.com/repos/${githubUser.login}/${repoName}`;
+
+    const repoResponse = await fetch(repoUrl, {
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'User-Agent': 'Geolzen-App' }
+    });
+
+    if (!repoResponse.ok) {
+      return res.redirect(`${FRONTEND_URL}?github_error=${encodeURIComponent(`Repository "${repoName}" not found or you do not have access.`)}`);
+    }
+
+    const repoData = await repoResponse.json();
+
+    // Verify the user has admin or push permissions
+    if (!repoData.permissions || (!repoData.permissions.admin && !repoData.permissions.push)) {
+      return res.redirect(`${FRONTEND_URL}?github_error=${encodeURIComponent(`You do not have write access to "${repoName}". Only repository owners or collaborators with push access can verify.`)}`);
+    }
+
+    // Verification passed — mark target as verified
+    const { error: updateErr } = await supabase
+      .from('targets')
+      .update({ verified: true, verification_method: 'oauth' })
+      .eq('id', targetId);
+
+    if (updateErr) {
+      return res.redirect(`${FRONTEND_URL}?github_error=${encodeURIComponent(updateErr.message)}`);
+    }
+
+    // Redirect back to frontend with success
+    return res.redirect(`${FRONTEND_URL}?github_verified=${targetId}`);
+
+  } catch (err) {
+    return res.redirect(`${FRONTEND_URL}?github_error=${encodeURIComponent(err.message)}`);
+  }
 });
 
 // ── Rules of Engagement Signature ───────────────────────────────
