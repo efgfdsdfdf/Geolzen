@@ -50,6 +50,7 @@ app.get('/api/health', (req, res) => {
     service: 'geolzen-control-plane',
     version: '2.0.4',
     supabase: supabase ? 'connected' : 'sandbox',
+    github_oauth: GITHUB_CLIENT_ID ? 'configured' : 'missing',
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
