@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+app.set('trust proxy', 1); // Trust Render's load balancer for correct req.protocol (https)
 
 // ── Supabase Client Initialization ─────────────────────────────
 const supabaseUrl = process.env.SUPABASE_URL;
