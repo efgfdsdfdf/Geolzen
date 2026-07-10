@@ -412,7 +412,11 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
         const url = await sendVulnerabilityAlert(userEmail, targetName, uniqueFindings);
         log(`[MAILER] ✅ Security alert successfully sent! View it here: ${url}`);
       } catch (err) {
-        log(`[ERROR] Failed to send email alert: ${err.message}`);
+        if (err.message.toLowerCase().includes('timeout')) {
+          log(`[WARNING] Email alert blocked. Render's Free Tier prevents outbound SMTP connections to prevent spam.`);
+        } else {
+          log(`[ERROR] Failed to send email alert: ${err.message}`);
+        }
       }
     }
 

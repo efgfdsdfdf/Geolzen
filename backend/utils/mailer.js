@@ -9,7 +9,7 @@ async function initMailer() {
       // Generate a test ethereal account
       testAccount = await nodemailer.createTestAccount();
       
-      // Create a transporter object
+      // Create a transporter object with strict timeouts since Render Free blocks SMTP
       transporter = nodemailer.createTransport({
         host: 'smtp.ethereal.email',
         port: 587,
@@ -17,7 +17,10 @@ async function initMailer() {
         auth: {
           user: testAccount.user,
           pass: testAccount.pass
-        }
+        },
+        connectionTimeout: 5000,
+        greetingTimeout: 5000,
+        socketTimeout: 5000
       });
       console.log(`[MAILER] Ethereal test account created: ${testAccount.user}`);
     } catch (err) {
