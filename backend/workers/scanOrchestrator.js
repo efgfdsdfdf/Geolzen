@@ -125,6 +125,16 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
     log(`[INFO] Target verified: ${targetName} (${targetType.toUpperCase()})`);
     log('[INFO] Rules of Engagement compliance: SIGNED & ACTIVE');
 
+    // Fetch existing vulnerabilities to avoid duplicates
+    const existingFindings = [];
+    if (supabase) {
+      const { data: existing } = await supabase
+        .from('vulnerabilities')
+        .select('title, description')
+        .eq('target_id', targetId);
+      if (existing) existingFindings.push(...existing);
+    }
+
     // ══════════════════════════════════════════════════════════
     // FREE TIER MODULES (3/12)
     // ══════════════════════════════════════════════════════════
@@ -146,7 +156,8 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
 
         if (dnsResult.findings.length > 0) {
           log(`[RECON] DNS analysis isolated ${dnsResult.findings.length} finding(s)`);
-          allFindings.push(...dnsResult.findings);
+          const unique = dnsResult.findings.filter(f => !existingFindings.some(e => e.title === f.title));
+          allFindings.push(...unique);
         }
 
         // Log email security status
@@ -183,7 +194,8 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
                                 finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
             log(`[DAST] ${severityTag} ${finding.title}`);
           }
-          allFindings.push(...headerResult.findings);
+          const unique = headerResult.findings.filter(f => !existingFindings.some(e => e.title === f.title));
+          allFindings.push(...unique);
         }
 
       } catch (err) {
@@ -206,7 +218,8 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
             const severityTag = finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
             log(`[DAST] ${severityTag} ${finding.title}`);
           }
-          allFindings.push(...cookieResult.findings);
+          const unique = cookieResult.findings.filter(f => !existingFindings.some(e => e.title === f.title));
+          allFindings.push(...unique);
         } else {
           log('[DAST] All cookies have secure attributes configured correctly.');
         }
@@ -246,7 +259,8 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
 
           if (sslResult.findings.length > 0) {
             log(`[SECURITY] SSL/TLS analysis isolated ${sslResult.findings.length} finding(s)`);
-            allFindings.push(...sslResult.findings);
+            const unique = sslResult.findings.filter(f => !existingFindings.some(e => e.title === f.title));
+            allFindings.push(...unique);
           }
         } catch (err) {
           log(`[ERROR] SSL scanner failed: ${err.message}`);
@@ -278,7 +292,7 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
                   packageJson = JSON.parse(text);
                   log('[SCA] [HIGH] package.json is publicly accessible on the web server!');
 
-                  allFindings.push({
+                  const finding = {
                     title: 'Publicly Accessible package.json File',
                     severity: 'high',
                     category: 'DAST Audit',
@@ -290,7 +304,10 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
                     fixedCode: `# Block access to dependency manifests\nlocation ~* (package\\.json|package-lock\\.json|\\.env) {\n    deny all;\n    return 404;\n}`,
                     remediated: false,
                     remediationType: 'config'
-                  });
+                  };
+                  if (!existingFindings.some(e => e.title === finding.title)) {
+                    allFindings.push(finding);
+                  }
                 } catch (e) {
                   // Response wasn't valid JSON, ignore
                 }
@@ -550,39 +567,60 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
     // Persist to Supabase
     if (supabase && uniqueFindings.length > 0) {
       try {
-        const insertPayload = uniqueFindings.map(f => ({
-          target_id: targetId,
-          title: f.title,
-          severity: f.severity,
-          category: f.category,
-          description: f.description,
-          impact: f.impact,
-          solution: f.solution,
-          file_name: f.fileName,
-          original_code: f.originalCode,
-          fixed_code: f.fixedCode,
-          remediated: false,
-          remediation_type: f.remediationType
-        }));
-
-        const { data: inserted, error } = await supabase
+        // Fetch existing vulnerabilities to avoid duplicating records
+        const { data: existingVulns } = await supabase
           .from('vulnerabilities')
-          .insert(insertPayload)
-          .select();
+          .select('id, title, file_name')
+          .eq('target_id', targetId);
 
-        if (error) {
-          log(`[WARNING] Database persistence error: ${error.message}`);
-        } else {
-          log(`[INFO] ${inserted.length} findings persisted to Supabase vulnerabilities table.`);
-          
-          // Map database IDs back onto findings
-          if (inserted) {
-            inserted.forEach((dbRow, idx) => {
-              if (uniqueFindings[idx]) {
-                uniqueFindings[idx].id = dbRow.id;
-              }
+        const existingVulnsMap = new Map();
+        if (existingVulns) {
+          existingVulns.forEach(v => existingVulnsMap.set(`${v.title}-${v.file_name}`, v));
+        }
+
+        const newVulnsToInsert = [];
+        uniqueFindings.forEach(f => {
+          const key = `${f.title}-${f.fileName}`;
+          if (!existingVulnsMap.has(key)) {
+            newVulnsToInsert.push({
+              target_id: targetId,
+              title: f.title,
+              severity: f.severity,
+              category: f.category,
+              description: f.description,
+              impact: f.impact,
+              solution: f.solution,
+              file_name: f.fileName,
+              original_code: f.originalCode,
+              fixed_code: f.fixedCode,
+              remediated: false,
+              remediation_type: f.remediationType
             });
+          } else {
+            f.id = existingVulnsMap.get(key).id;
           }
+        });
+
+        if (newVulnsToInsert.length > 0) {
+          const { data: inserted, error } = await supabase
+            .from('vulnerabilities')
+            .insert(newVulnsToInsert)
+            .select();
+
+          if (error) {
+            log(`[WARNING] Database persistence error: ${error.message}`);
+          } else {
+            log(`[INFO] ${inserted.length} NEW findings persisted to Supabase vulnerabilities table.`);
+            
+            if (inserted) {
+              inserted.forEach((dbRow) => {
+                const fIndex = uniqueFindings.findIndex(uf => uf.title === dbRow.title && uf.fileName === dbRow.file_name);
+                if (fIndex !== -1) uniqueFindings[fIndex].id = dbRow.id;
+              });
+            }
+          }
+        } else {
+          log(`[INFO] No new findings to persist. All findings already exist in the database.`);
         }
       } catch (err) {
         log(`[WARNING] Database write failed: ${err.message}`);
