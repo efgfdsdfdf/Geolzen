@@ -290,27 +290,57 @@ export default function App() {
     if (!client) return;
     setIsDbsyncing(true);
     try {
+      // Get the authenticated user
+      const { data: authData } = await client.auth.getUser();
+      const user = authData?.user;
+      
+      let orgId = null;
+
+      if (user) {
+        // Fetch the user's profile to get their specific organization_id
+        const { data: profiles } = await client.from('profiles').select('organization_id').eq('id', user.id).limit(1);
+        if (profiles && profiles.length > 0) {
+          orgId = profiles[0].organization_id;
+        }
+      }
+
+      if (!orgId) {
+        console.warn("No authenticated user/organization found. Sandbox mode active.");
+        setIsDbsyncing(false);
+        return;
+      }
+
+      // Fetch the specific organization
+      const { data: dbOrgs } = await client.from('organizations').select('id, plan_tier').eq('id', orgId).limit(1);
+      if (dbOrgs && dbOrgs.length > 0) setOrgData(dbOrgs[0]);
+
+      // Fetch only targets belonging to this organization
       const { data: dbTargets, error: targetError } = await client
         .from('targets')
-        .select('*');
+        .select('*')
+        .eq('organization_id', orgId);
       
       if (targetError) throw targetError;
 
-      const { data: dbOrgs } = await client.from('organizations').select('id, plan_tier').limit(1);
-      if (dbOrgs && dbOrgs.length > 0) setOrgData(dbOrgs[0]);
-
       if (dbTargets && dbTargets.length > 0) {
+        const targetIds = dbTargets.map(t => t.id);
+
         const { data: dbSigs } = await client
           .from('roe_signatures')
-          .select('target_id, signed_at');
+          .select('target_id, signed_at')
+          .in('target_id', targetIds);
 
         const { data: dbVulns } = await client
           .from('vulnerabilities')
-          .select('*');
+          .select('*')
+          .in('target_id', targetIds);
+
+        const vulnIds = (dbVulns && dbVulns.length > 0) ? dbVulns.map(v => v.id) : ['00000000-0000-0000-0000-000000000000'];
 
         const { data: dbChats } = await client
           .from('chat_messages')
           .select('*')
+          .in('vulnerability_id', vulnIds)
           .order('created_at', { ascending: true });
 
         const mappedTargets = dbTargets.map(t => {
@@ -670,8 +700,7 @@ export default function App() {
 
     if (supabaseClient) {
       try {
-        const { data: orgs } = await supabaseClient.from('organizations').select('id').limit(1);
-        const orgId = orgs?.[0]?.id;
+        const orgId = orgData?.id;
 
         if (orgId) {
           const { data: inserted, error } = await supabaseClient
