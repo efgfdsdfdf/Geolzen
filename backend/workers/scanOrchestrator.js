@@ -1,17 +1,27 @@
 /**
- * Geolzen Scan Orchestrator
+ * Geolzen Scan Orchestrator v3.0
  * 
- * Coordinates all scanner modules, aggregates findings,
+ * Coordinates all 12 scanner modules, aggregates findings,
  * and persists results to the Supabase database.
  * 
- * Scan Pipeline:
- *   1. Validate target verification status and ROE signature
- *   2. Run DNS reconnaissance (passive)
- *   3. Run SSL/TLS certificate analysis (passive)
- *   4. Run HTTP security header audit (passive)
- *   5. Run dependency vulnerability scan (OSV.dev API or Trivy CLI)
- *   6. Aggregate, deduplicate, and persist findings
- *   7. Update scan job status
+ * Scan Pipeline (12 Modules):
+ *   FREE TIER:
+ *     1. DNS Reconnaissance (passive)
+ *     2. HTTP Security Header Audit (passive)
+ *     3. Cookie Security Analysis (passive)
+ *   STARTER TIER:
+ *     4. SSL/TLS Certificate Analysis (passive)
+ *     5. Dependency Vulnerability Scan (SCA via OSV.dev)
+ *     6. CORS Misconfiguration Detection
+ *   TEAM TIER:
+ *     7. Active Network Port Probing (17 ports)
+ *     8. Deep CMS & App Layer Crawling
+ *     9. Sensitive File Exposure Probing
+ *    10. Reflected XSS Payload Injection
+ *    11. SQL Injection Error Detection
+ *    12. Open Redirect Payload Testing
+ *   
+ *   FINALIZE: Aggregate, deduplicate, persist, and alert.
  */
 
 const { scanHeaders } = require('../scanners/headerScanner');
@@ -20,28 +30,33 @@ const { scanDNS } = require('../scanners/dnsScanner');
 const { scanDependencies } = require('../scanners/depScanner');
 const { scanPorts } = require('../scanners/portScanner');
 const { scanCMS } = require('../scanners/cmsScanner');
+const { scanCORS } = require('../scanners/corsScanner');
+const { scanCookies } = require('../scanners/cookieScanner');
+const { scanSensitiveFiles } = require('../scanners/sensitiveFileScanner');
+const { scanXSS } = require('../scanners/xssScanner');
+const { scanSQLi } = require('../scanners/sqliScanner');
+const { scanOpenRedirect } = require('../scanners/openRedirectScanner');
 const { sendVulnerabilityAlert } = require('../utils/mailer');
 
 /**
  * Execute a full scan pipeline against a verified target
- * @param {object} params
- * @param {object} params.supabase - Supabase client instance
- * @param {string} params.targetId - Target ID from database
- * @param {string} params.tier - Subscription tier (free, starter, team)
- * @param {string} params.userEmail - User's email for alerts
- * @param {boolean} params.sendEmailAlerts - Whether to send emails
- * @param {function} params.onLog - Callback for real-time log streaming
- * @returns {Promise<object>} - Aggregated scan results
  */
 async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free', userEmail, sendEmailAlerts = true, onLog }) {
   const log = onLog || ((msg) => console.log(`[SCAN] ${msg}`));
   const allFindings = [];
+  const scanStart = Date.now();
   const scanMetadata = {
     targetId,
     scanType,
     startTime: new Date().toISOString(),
     scanners: {},
     errors: []
+  };
+
+  // Helper: elapsed time string
+  const elapsed = () => {
+    const s = ((Date.now() - scanStart) / 1000).toFixed(1);
+    return `${s}s`;
   };
 
   // Create a scan job record in the database
@@ -68,7 +83,8 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
 
   try {
     // ── Step 1: Fetch and validate target ─────────────────────
-    log('[INFO] Initializing Geolzen Security Core v2.0.4...');
+    log('[INFO] Initializing Geolzen Security Core v3.0.0...');
+    log(`[INFO] Scan tier: ${tier.toUpperCase()} | Modules available: ${tier === 'team' ? '12/12' : tier === 'starter' ? '6/12' : '3/12'}`);
 
     let target = null;
     if (supabase) {
@@ -103,13 +119,18 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
 
     const targetName = target ? target.name : 'sandbox-target';
     const targetType = target ? target.type : 'domain';
+    const targetUrl = `https://${targetName}`;
 
     log(`[INFO] Target verified: ${targetName} (${targetType.toUpperCase()})`);
     log('[INFO] Rules of Engagement compliance: SIGNED & ACTIVE');
 
-    // ── Step 2: DNS Reconnaissance ────────────────────────────
+    // ══════════════════════════════════════════════════════════
+    // FREE TIER MODULES (3/12)
+    // ══════════════════════════════════════════════════════════
+
+    // ── Module 1: DNS Reconnaissance ──────────────────────────
     if (targetType === 'domain') {
-      log(`[RECON] Commencing DNS record enumeration for ${targetName}...`);
+      log(`[RECON] [${elapsed()}] Commencing DNS record enumeration for ${targetName}...`);
 
       try {
         const dnsResult = await scanDNS(targetName);
@@ -138,44 +159,9 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
       }
     }
 
-    // ── Step 3: SSL/TLS Certificate Analysis ──────────────────
+    // ── Module 2: HTTP Security Header Audit ──────────────────
     if (targetType === 'domain') {
-      if (tier === 'free') {
-        log('[INFO] SSL/TLS Scanning is locked on the Free tier. Upgrade to Starter or Team to unlock.');
-      } else {
-        log(`[SECURITY] Analyzing SSL/TLS certificate for ${targetName}:443...`);
-
-        try {
-          const sslResult = await scanSSL(targetName);
-          scanMetadata.scanners.ssl = sslResult.metadata;
-
-          if (sslResult.metadata.certificate) {
-            const cert = sslResult.metadata.certificate;
-            log(`[SECURITY] Certificate Issuer: ${cert.issuer}`);
-            log(`[SECURITY] Valid Until: ${cert.validTo}`);
-            log(`[SECURITY] Protocol: ${cert.protocol || 'Unknown'}`);
-            log(`[SECURITY] Authorized: ${cert.authorized ? 'YES (Trusted CA)' : 'NO (Untrusted)'}`);
-          }
-
-          if (sslResult.metadata.error) {
-            log(`[WARNING] SSL probe issue: ${sslResult.metadata.error}`);
-          }
-
-          if (sslResult.findings.length > 0) {
-            log(`[SECURITY] SSL/TLS analysis isolated ${sslResult.findings.length} finding(s)`);
-            allFindings.push(...sslResult.findings);
-          }
-        } catch (err) {
-          log(`[ERROR] SSL scanner failed: ${err.message}`);
-          scanMetadata.errors.push({ scanner: 'ssl', error: err.message });
-        }
-      }
-    }
-
-    // ── Step 4: HTTP Security Header Audit ────────────────────
-    if (targetType === 'domain') {
-      const targetUrl = `https://${targetName}`;
-      log(`[DAST] Auditing HTTP security headers at ${targetUrl}...`);
+      log(`[DAST] [${elapsed()}] Auditing HTTP security headers at ${targetUrl}...`);
 
       try {
         const headerResult = await scanHeaders(targetUrl);
@@ -205,101 +191,131 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
       }
     }
 
-    // ── Step 4.5: Active Port & Service Discovery ─────────────
+    // ── Module 3: Cookie Security Analysis ────────────────────
     if (targetType === 'domain') {
-      if (tier !== 'team') {
-        log('[INFO] Active Port Probing is locked on your current tier. Upgrade to Team to unlock deep network scans.');
-      } else {
-        log(`[NETWORK] Probing management and database ports at ${targetName}...`);
-        try {
-        const portResult = await scanPorts(targetName);
-        scanMetadata.scanners.ports = portResult.metadata;
-
-        if (portResult.metadata.error) {
-          log(`[WARNING] Port probe issue: ${portResult.metadata.error}`);
-        } else {
-          log(`[NETWORK] Scanned ${portResult.metadata.portsScanned} ports. Found ${portResult.metadata.openPorts} open ports.`);
-        }
-
-        if (portResult.findings.length > 0) {
-          for (const finding of portResult.findings) {
-            log(`[NETWORK] [CRITICAL] ${finding.title}`);
-          }
-          allFindings.push(...portResult.findings);
-        }
-      } catch (err) {
-        log(`[ERROR] Port scanner failed: ${err.message}`);
-        scanMetadata.errors.push({ scanner: 'ports', error: err.message });
-      }
-    }
-    }
-
-    // ── Step 5: Dependency Vulnerability Scan ─────────────────
-    if (tier === 'free') {
-      log('[INFO] Dependency Vulnerability Audits are locked on the Free tier. Upgrade to Starter to unlock.');
-    } else {
-      log('[SCA] Checking for dependency vulnerabilities via OSV.dev intelligence feed...');
+      log(`[DAST] [${elapsed()}] Analyzing cookie security attributes at ${targetUrl}...`);
 
       try {
-      // For repository targets, we could scan the actual repo path
-      // For domain targets, attempt to fetch package.json if exposed
-      let packageJson = null;
+        const cookieResult = await scanCookies(targetUrl);
+        scanMetadata.scanners.cookies = cookieResult.metadata;
 
-      if (targetType === 'domain') {
-        // Try to detect if package.json is publicly exposed (security check itself)
+        if (cookieResult.findings.length > 0) {
+          log(`[DAST] Cookie audit isolated ${cookieResult.findings.length} finding(s)`);
+          for (const finding of cookieResult.findings) {
+            const severityTag = finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
+            log(`[DAST] ${severityTag} ${finding.title}`);
+          }
+          allFindings.push(...cookieResult.findings);
+        } else {
+          log('[DAST] All cookies have secure attributes configured correctly.');
+        }
+
+      } catch (err) {
+        log(`[ERROR] Cookie scanner failed: ${err.message}`);
+        scanMetadata.errors.push({ scanner: 'cookies', error: err.message });
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // STARTER TIER MODULES (6/12)
+    // ══════════════════════════════════════════════════════════
+
+    // ── Module 4: SSL/TLS Certificate Analysis ────────────────
+    if (targetType === 'domain') {
+      if (tier === 'free') {
+        log('[INFO] 🔒 SSL/TLS Scanning is locked on the Free tier. Upgrade to Starter or Team to unlock.');
+      } else {
+        log(`[SECURITY] [${elapsed()}] Analyzing SSL/TLS certificate for ${targetName}:443...`);
+
         try {
-          const pkgResponse = await fetch(`https://${targetName}/package.json`, {
-            headers: { 'User-Agent': 'Geolzen-Security-Scanner/1.0' }
-          });
+          const sslResult = await scanSSL(targetName);
+          scanMetadata.scanners.ssl = sslResult.metadata;
 
-          if (pkgResponse.ok) {
-            const contentType = pkgResponse.headers.get('content-type') || '';
-            if (contentType.includes('json') || contentType.includes('text')) {
-              const text = await pkgResponse.text();
-              try {
-                packageJson = JSON.parse(text);
-                log('[SCA] [HIGH] package.json is publicly accessible on the web server!');
+          if (sslResult.metadata.certificate) {
+            const cert = sslResult.metadata.certificate;
+            log(`[SECURITY] Certificate Issuer: ${cert.issuer}`);
+            log(`[SECURITY] Valid Until: ${cert.validTo}`);
+            log(`[SECURITY] Protocol: ${cert.protocol || 'Unknown'}`);
+            log(`[SECURITY] Authorized: ${cert.authorized ? 'YES (Trusted CA)' : 'NO (Untrusted)'}`);
+          }
 
-                // Add finding for exposed package.json
-                allFindings.push({
-                  title: 'Publicly Accessible package.json File',
-                  severity: 'high',
-                  category: 'DAST Audit',
-                  description: `The file package.json is publicly accessible at https://${targetName}/package.json. This file exposes the complete dependency tree, package versions, and potentially internal project metadata to any visitor.`,
-                  impact: 'High. Attackers can enumerate all dependencies and their exact versions, then cross-reference them against vulnerability databases to find exploitable CVEs without any scanning.',
-                  solution: 'Configure your web server to block access to package.json, package-lock.json, and other development configuration files. In Nginx: location ~* (package\\.json|package-lock\\.json) { deny all; }',
-                  fileName: `https://${targetName}/package.json`,
-                  originalCode: `# package.json is publicly accessible\nlocation / {\n    # No restrictions\n}`,
-                  fixedCode: `# Block access to dependency manifests\nlocation ~* (package\\.json|package-lock\\.json|\\.env) {\n    deny all;\n    return 404;\n}`,
-                  remediated: false,
-                  remediationType: 'config'
-                });
-              } catch (e) {
-                // Response wasn't valid JSON, ignore
+          if (sslResult.metadata.error) {
+            log(`[WARNING] SSL probe issue: ${sslResult.metadata.error}`);
+          }
+
+          if (sslResult.findings.length > 0) {
+            log(`[SECURITY] SSL/TLS analysis isolated ${sslResult.findings.length} finding(s)`);
+            allFindings.push(...sslResult.findings);
+          }
+        } catch (err) {
+          log(`[ERROR] SSL scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'ssl', error: err.message });
+        }
+      }
+    }
+
+    // ── Module 5: Dependency Vulnerability Scan ───────────────
+    if (tier === 'free') {
+      log('[INFO] 🔒 Dependency Vulnerability Audits are locked on the Free tier. Upgrade to Starter to unlock.');
+    } else {
+      log(`[SCA] [${elapsed()}] Checking for dependency vulnerabilities via OSV.dev intelligence feed...`);
+
+      try {
+        let packageJson = null;
+
+        if (targetType === 'domain') {
+          try {
+            const pkgResponse = await fetch(`https://${targetName}/package.json`, {
+              headers: { 'User-Agent': 'Geolzen-Security-Scanner/1.0' }
+            });
+
+            if (pkgResponse.ok) {
+              const contentType = pkgResponse.headers.get('content-type') || '';
+              if (contentType.includes('json') || contentType.includes('text')) {
+                const text = await pkgResponse.text();
+                try {
+                  packageJson = JSON.parse(text);
+                  log('[SCA] [HIGH] package.json is publicly accessible on the web server!');
+
+                  allFindings.push({
+                    title: 'Publicly Accessible package.json File',
+                    severity: 'high',
+                    category: 'DAST Audit',
+                    description: `The file package.json is publicly accessible at https://${targetName}/package.json. This file exposes the complete dependency tree, package versions, and potentially internal project metadata to any visitor.`,
+                    impact: 'High. Attackers can enumerate all dependencies and their exact versions, then cross-reference them against vulnerability databases to find exploitable CVEs without any scanning.',
+                    solution: 'Configure your web server to block access to package.json, package-lock.json, and other development configuration files. In Nginx: location ~* (package\\.json|package-lock\\.json) { deny all; }',
+                    fileName: `https://${targetName}/package.json`,
+                    originalCode: `# package.json is publicly accessible\nlocation / {\n    # No restrictions\n}`,
+                    fixedCode: `# Block access to dependency manifests\nlocation ~* (package\\.json|package-lock\\.json|\\.env) {\n    deny all;\n    return 404;\n}`,
+                    remediated: false,
+                    remediationType: 'config'
+                  });
+                } catch (e) {
+                  // Response wasn't valid JSON, ignore
+                }
               }
             }
+          } catch (e) {
+            // Fetch failed, no package.json exposed (which is good)
           }
-        } catch (e) {
-          // Fetch failed, no package.json exposed (which is good)
         }
-      }
 
-      if (packageJson && Object.keys(packageJson.dependencies || {}).length > 0) {
-        const depResult = await scanDependencies(null, packageJson);
-        scanMetadata.scanners.dependencies = depResult.metadata;
+        if (packageJson && Object.keys(packageJson.dependencies || {}).length > 0) {
+          const depResult = await scanDependencies(null, packageJson);
+          scanMetadata.scanners.dependencies = depResult.metadata;
 
-        if (depResult.findings.length > 0) {
-          for (const finding of depResult.findings) {
-            const severityTag = finding.severity === 'critical' ? '[CRITICAL]' : '[HIGH]';
-            log(`[SCA] ${severityTag} ${finding.title}`);
+          if (depResult.findings.length > 0) {
+            for (const finding of depResult.findings) {
+              const severityTag = finding.severity === 'critical' ? '[CRITICAL]' : '[HIGH]';
+              log(`[SCA] ${severityTag} ${finding.title}`);
+            }
+            allFindings.push(...depResult.findings);
+          } else {
+            log('[SCA] No known vulnerabilities found in detected dependencies.');
           }
-          allFindings.push(...depResult.findings);
         } else {
-          log('[SCA] No known vulnerabilities found in detected dependencies.');
+          log('[SCA] No exposed dependency manifests detected (this is expected and secure).');
         }
-      } else {
-        log('[SCA] No exposed dependency manifests detected (this is expected and secure).');
-      }
 
       } catch (err) {
         log(`[ERROR] Dependency scanner failed: ${err.message}`);
@@ -307,32 +323,110 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
       }
     }
 
-    // ── Step 5.5: Application Layer (CMS) Scan ────────────────
+    // ── Module 6: CORS Misconfiguration Detection ─────────────
+    if (targetType === 'domain') {
+      if (tier === 'free') {
+        log('[INFO] 🔒 CORS Misconfiguration scanning is locked on the Free tier. Upgrade to Starter to unlock.');
+      } else {
+        log(`[DAST] [${elapsed()}] Testing CORS policy at ${targetUrl}...`);
+
+        try {
+          const corsResult = await scanCORS(targetUrl);
+          scanMetadata.scanners.cors = corsResult.metadata;
+
+          if (corsResult.findings.length > 0) {
+            for (const finding of corsResult.findings) {
+              const severityTag = finding.severity === 'critical' ? '[CRITICAL]' :
+                                  finding.severity === 'high' ? '[HIGH]' : '[WARNING]';
+              log(`[DAST] ${severityTag} ${finding.title}`);
+            }
+            allFindings.push(...corsResult.findings);
+          } else {
+            log('[DAST] CORS policy is properly configured. No misconfigurations detected.');
+          }
+
+        } catch (err) {
+          log(`[ERROR] CORS scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'cors', error: err.message });
+        }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // TEAM TIER MODULES (12/12)
+    // ══════════════════════════════════════════════════════════
+
+    // ── Module 7: Active Network Port Probing ─────────────────
     if (targetType === 'domain') {
       if (tier !== 'team') {
-        log('[INFO] Deep CMS & App Layer scanning is locked on your current tier. Upgrade to Team to unlock.');
+        log('[INFO] 🔒 Active Port Probing (17 ports) is locked. Upgrade to Team to unlock deep network scans.');
       } else {
-        const targetUrl = `https://${targetName}`;
-        log(`[DAST] Crawling application layer for CMS vulnerabilities at ${targetUrl}...`);
+        log(`[NETWORK] [${elapsed()}] Probing 17 infrastructure ports at ${targetName}...`);
         try {
-        const cmsResult = await scanCMS(targetUrl);
-        scanMetadata.scanners.cms = cmsResult.metadata;
+          const portResult = await scanPorts(targetName);
+          scanMetadata.scanners.ports = portResult.metadata;
 
-        if (cmsResult.metadata.error) {
-          log(`[WARNING] CMS probe issue: ${cmsResult.metadata.error}`);
-        }
-
-        if (cmsResult.findings.length > 0) {
-          for (const finding of cmsResult.findings) {
-            const severityTag = finding.severity === 'critical' ? '[CRITICAL]' :
-                                finding.severity === 'high' ? '[HIGH]' :
-                                finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
-            log(`[DAST] ${severityTag} ${finding.title}`);
+          if (portResult.metadata.error) {
+            log(`[WARNING] Port probe issue: ${portResult.metadata.error}`);
+          } else {
+            log(`[NETWORK] Scanned ${portResult.metadata.portsScanned} ports. Found ${portResult.metadata.openPorts} open.`);
           }
-          allFindings.push(...cmsResult.findings);
-        } else {
-          log('[DAST] No exposed CMS admin panels or version disclosures found.');
+
+          if (portResult.findings.length > 0) {
+            for (const finding of portResult.findings) {
+              const severityTag = finding.severity === 'critical' ? '[CRITICAL]' :
+                                  finding.severity === 'high' ? '[HIGH]' : '[WARNING]';
+              log(`[NETWORK] ${severityTag} ${finding.title}`);
+            }
+            allFindings.push(...portResult.findings);
+          } else {
+            log('[NETWORK] No exposed management or database ports detected.');
+          }
+        } catch (err) {
+          log(`[ERROR] Port scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'ports', error: err.message });
         }
+      }
+    }
+
+    // ── Module 8: Deep CMS & App Layer Crawling ───────────────
+    if (targetType === 'domain') {
+      if (tier !== 'team') {
+        log('[INFO] 🔒 Deep CMS & App Layer scanning is locked. Upgrade to Team to unlock.');
+      } else {
+        log(`[DAST] [${elapsed()}] Crawling application layer for CMS vulnerabilities at ${targetUrl}...`);
+        try {
+          const cmsResult = await scanCMS(targetUrl);
+          scanMetadata.scanners.cms = cmsResult.metadata;
+
+          if (cmsResult.metadata.error) {
+            log(`[WARNING] CMS probe issue: ${cmsResult.metadata.error}`);
+          }
+
+          // Log detected technologies
+          if (cmsResult.metadata.technologies && cmsResult.metadata.technologies.length > 0) {
+            log(`[DAST] Technologies detected: ${cmsResult.metadata.technologies.join(', ')}`);
+          }
+
+          if (cmsResult.metadata.adminPanels && cmsResult.metadata.adminPanels.length > 0) {
+            log(`[DAST] Exposed admin panels: ${cmsResult.metadata.adminPanels.join(', ')}`);
+          }
+
+          if (cmsResult.metadata.secretsFound > 0) {
+            log(`[DAST] [CRITICAL] ${cmsResult.metadata.secretsFound} secret key(s) found in client-side code!`);
+          }
+
+          if (cmsResult.findings.length > 0) {
+            for (const finding of cmsResult.findings) {
+              const severityTag = finding.severity === 'critical' ? '[CRITICAL]' :
+                                  finding.severity === 'high' ? '[HIGH]' :
+                                  finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
+              log(`[DAST] ${severityTag} ${finding.title}`);
+            }
+            allFindings.push(...cmsResult.findings);
+          } else {
+            log('[DAST] No exposed CMS admin panels, version disclosures, or leaked secrets found.');
+          }
         } catch (err) {
           log(`[ERROR] CMS scanner failed: ${err.message}`);
           scanMetadata.errors.push({ scanner: 'cms', error: err.message });
@@ -340,8 +434,113 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
       }
     }
 
-    // ── Step 6: Aggregate and Persist ─────────────────────────
-    log('[INFO] Aggregating findings and compiling remediations...');
+    // ── Module 9: Sensitive File Exposure Probing ──────────────
+    if (targetType === 'domain') {
+      if (tier !== 'team') {
+        log('[INFO] 🔒 Sensitive File Exposure scanning is locked. Upgrade to Team to unlock.');
+      } else {
+        log(`[DAST] [${elapsed()}] Probing for exposed sensitive files and directories at ${targetUrl}...`);
+        try {
+          const fileResult = await scanSensitiveFiles(targetUrl);
+          scanMetadata.scanners.sensitiveFiles = fileResult.metadata;
+
+          if (fileResult.findings.length > 0) {
+            for (const finding of fileResult.findings) {
+              const severityTag = finding.severity === 'critical' ? '[CRITICAL]' :
+                                  finding.severity === 'high' ? '[HIGH]' :
+                                  finding.severity === 'medium' ? '[WARNING]' : '[INFO]';
+              log(`[DAST] ${severityTag} ${finding.title}`);
+            }
+            allFindings.push(...fileResult.findings);
+          } else {
+            log('[DAST] No exposed sensitive files detected. Server configuration looks clean.');
+          }
+        } catch (err) {
+          log(`[ERROR] Sensitive file scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'sensitiveFiles', error: err.message });
+        }
+      }
+    }
+
+    // ── Module 10: Reflected XSS Payload Injection ────────────
+    if (targetType === 'domain') {
+      if (tier !== 'team') {
+        log('[INFO] 🔒 XSS Payload Testing is locked. Upgrade to Team to unlock active injection scans.');
+      } else {
+        log(`[PAYLOAD] [${elapsed()}] Injecting XSS canary payloads into ${targetUrl} query parameters...`);
+        try {
+          const xssResult = await scanXSS(targetUrl);
+          scanMetadata.scanners.xss = xssResult.metadata;
+
+          if (xssResult.findings.length > 0) {
+            for (const finding of xssResult.findings) {
+              log(`[PAYLOAD] [HIGH] ${finding.title}`);
+            }
+            allFindings.push(...xssResult.findings);
+          } else {
+            log('[PAYLOAD] No reflected XSS vulnerabilities detected. Input encoding appears secure.');
+          }
+        } catch (err) {
+          log(`[ERROR] XSS scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'xss', error: err.message });
+        }
+      }
+    }
+
+    // ── Module 11: SQL Injection Error Detection ──────────────
+    if (targetType === 'domain') {
+      if (tier !== 'team') {
+        log('[INFO] 🔒 SQL Injection Testing is locked. Upgrade to Team to unlock active injection scans.');
+      } else {
+        log(`[PAYLOAD] [${elapsed()}] Sending SQL injection probes to ${targetUrl}...`);
+        try {
+          const sqliResult = await scanSQLi(targetUrl);
+          scanMetadata.scanners.sqli = sqliResult.metadata;
+
+          if (sqliResult.findings.length > 0) {
+            for (const finding of sqliResult.findings) {
+              log(`[PAYLOAD] [CRITICAL] ${finding.title}`);
+            }
+            allFindings.push(...sqliResult.findings);
+          } else {
+            log('[PAYLOAD] No SQL injection vulnerabilities detected. Query parameterization appears secure.');
+          }
+        } catch (err) {
+          log(`[ERROR] SQLi scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'sqli', error: err.message });
+        }
+      }
+    }
+
+    // ── Module 12: Open Redirect Payload Testing ──────────────
+    if (targetType === 'domain') {
+      if (tier !== 'team') {
+        log('[INFO] 🔒 Open Redirect Testing is locked. Upgrade to Team to unlock.');
+      } else {
+        log(`[PAYLOAD] [${elapsed()}] Testing redirect parameters for open redirect at ${targetUrl}...`);
+        try {
+          const redirectResult = await scanOpenRedirect(targetUrl);
+          scanMetadata.scanners.openRedirect = redirectResult.metadata;
+
+          if (redirectResult.findings.length > 0) {
+            for (const finding of redirectResult.findings) {
+              log(`[PAYLOAD] [WARNING] ${finding.title}`);
+            }
+            allFindings.push(...redirectResult.findings);
+          } else {
+            log('[PAYLOAD] No open redirect vulnerabilities detected.');
+          }
+        } catch (err) {
+          log(`[ERROR] Open redirect scanner failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'openRedirect', error: err.message });
+        }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // FINALIZE: Aggregate, Deduplicate, Persist, Alert
+    // ══════════════════════════════════════════════════════════
+    log(`[INFO] [${elapsed()}] Aggregating findings and compiling remediations...`);
 
     // Deduplicate findings by title
     const seen = new Set();
@@ -402,8 +601,11 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
     const counts = { critical: 0, high: 0, medium: 0, low: 0 };
     uniqueFindings.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
 
-    log(`[INFO] SCAN COMPLETED SUCCESSFULLY. ${uniqueFindings.length} vulnerabilities isolated.`);
+    log(`[INFO] ═══════════════════════════════════════════════════`);
+    log(`[INFO] SCAN COMPLETED SUCCESSFULLY in ${elapsed()}.`);
+    log(`[INFO] ${uniqueFindings.length} unique vulnerabilities isolated across ${Object.keys(scanMetadata.scanners).length} modules.`);
     log(`[INFO] Breakdown — Critical: ${counts.critical} | High: ${counts.high} | Medium: ${counts.medium} | Low: ${counts.low}`);
+    log(`[INFO] ═══════════════════════════════════════════════════`);
 
     // Trigger Email Alerts
     if (sendEmailAlerts && uniqueFindings.length > 0) {
