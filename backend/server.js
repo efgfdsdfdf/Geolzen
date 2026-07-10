@@ -411,14 +411,19 @@ app.post('/api/targets/:id/sign-roe', async (req, res) => {
 // Launch a real scan pipeline (async — returns immediately with job ID)
 app.post('/api/targets/:id/scan', async (req, res) => {
   const { id } = req.params;
-  const { scanType, tier, userEmail, sendEmailAlerts } = req.body;
+  const { scanType, userEmail, sendEmailAlerts } = req.body;
+  let verifiedTier = 'free';
 
   // Pre-flight compliance checks
   if (supabase) {
     try {
       const { data: target } = await supabase
         .from('targets')
-        .select('verified')
+        .select(`
+          verified,
+          organization_id,
+          organizations ( plan_tier )
+        `)
         .eq('id', id)
         .single();
 
@@ -426,6 +431,10 @@ app.post('/api/targets/:id/scan', async (req, res) => {
         return res.status(403).json({
           error: 'COMPLIANCE BLOCK: Target domain ownership is not verified. Scan rejected.'
         });
+      }
+
+      if (target.organizations && target.organizations.plan_tier) {
+        verifiedTier = target.organizations.plan_tier;
       }
 
       const { data: sig } = await supabase
@@ -467,7 +476,7 @@ app.post('/api/targets/:id/scan', async (req, res) => {
     supabase,
     targetId: id,
     scanType: scanType || 'passive',
-    tier: tier || 'free',
+    tier: verifiedTier,
     userEmail: userEmail || 'user@geolzen.com',
     sendEmailAlerts: sendEmailAlerts !== false,
     onLog: (msg) => {
