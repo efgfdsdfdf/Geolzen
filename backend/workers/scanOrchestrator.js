@@ -36,6 +36,7 @@ const { scanSensitiveFiles } = require('../scanners/sensitiveFileScanner');
 const { scanXSS } = require('../scanners/xssScanner');
 const { scanSQLi } = require('../scanners/sqliScanner');
 const { scanOpenRedirect } = require('../scanners/openRedirectScanner');
+const { crawlSite } = require('../scanners/crawler');
 const { sendVulnerabilityAlert } = require('../utils/mailer');
 
 /**
@@ -462,77 +463,68 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
       }
     }
 
-    // ── Module 10: Reflected XSS Payload Injection ────────────
+    // ── Module 10, 11, 12: Web Crawler & Deep Payload Injection ────────────
     if (targetType === 'domain') {
       if (tier !== 'team') {
-        log('[INFO] 🔒 XSS Payload Testing is locked. Upgrade to Team to unlock active injection scans.');
+        log('[INFO] 🔒 Full-Site Crawler & Payload Testing is locked. Upgrade to Team to unlock active injection scans.');
       } else {
-        log(`[PAYLOAD] [${elapsed()}] Injecting XSS canary payloads into ${targetUrl} query parameters...`);
+        log(`[SPIDER] [${elapsed()}] Initializing web crawler to discover internal pages at ${targetUrl}...`);
         try {
-          const xssResult = await scanXSS(targetUrl);
-          scanMetadata.scanners.xss = xssResult.metadata;
+          const crawlResult = await crawlSite(targetUrl);
+          scanMetadata.scanners.crawler = crawlResult.metadata;
+          const pagesToScan = crawlResult.pages;
+          
+          log(`[SPIDER] Discovered ${pagesToScan.length} internal page(s) for deep scanning.`);
 
-          if (xssResult.findings.length > 0) {
-            for (const finding of xssResult.findings) {
-              log(`[PAYLOAD] [HIGH] ${finding.title}`);
-            }
-            allFindings.push(...xssResult.findings);
-          } else {
-            log('[PAYLOAD] No reflected XSS vulnerabilities detected. Input encoding appears secure.');
+          // Initialize metadata for payload scanners
+          scanMetadata.scanners.xss = { findingsCount: 0, pagesScanned: 0 };
+          scanMetadata.scanners.sqli = { findingsCount: 0, pagesScanned: 0 };
+          scanMetadata.scanners.openRedirect = { findingsCount: 0, pagesScanned: 0 };
+
+          for (const pageUrl of pagesToScan) {
+            log(`[PAYLOAD] [${elapsed()}] Deep scanning ${pageUrl}...`);
+            
+            // XSS
+            try {
+              const xssResult = await scanXSS(pageUrl);
+              scanMetadata.scanners.xss.pagesScanned++;
+              if (xssResult.findings.length > 0) {
+                scanMetadata.scanners.xss.findingsCount += xssResult.findings.length;
+                for (const f of xssResult.findings) log(`[PAYLOAD] [HIGH] ${f.title} on ${pageUrl}`);
+                allFindings.push(...xssResult.findings);
+              }
+            } catch (e) {}
+
+            // SQLi
+            try {
+              const sqliResult = await scanSQLi(pageUrl);
+              scanMetadata.scanners.sqli.pagesScanned++;
+              if (sqliResult.findings.length > 0) {
+                scanMetadata.scanners.sqli.findingsCount += sqliResult.findings.length;
+                for (const f of sqliResult.findings) log(`[PAYLOAD] [CRITICAL] ${f.title} on ${pageUrl}`);
+                allFindings.push(...sqliResult.findings);
+              }
+            } catch (e) {}
+
+            // Open Redirect
+            try {
+              const redirectResult = await scanOpenRedirect(pageUrl);
+              scanMetadata.scanners.openRedirect.pagesScanned++;
+              if (redirectResult.findings.length > 0) {
+                scanMetadata.scanners.openRedirect.findingsCount += redirectResult.findings.length;
+                for (const f of redirectResult.findings) log(`[PAYLOAD] [WARNING] ${f.title} on ${pageUrl}`);
+                allFindings.push(...redirectResult.findings);
+              }
+            } catch (e) {}
           }
+          
+          if (scanMetadata.scanners.xss.findingsCount === 0) log('[PAYLOAD] No reflected XSS vulnerabilities detected across all pages.');
+          if (scanMetadata.scanners.sqli.findingsCount === 0) log('[PAYLOAD] No SQL injection vulnerabilities detected across all pages.');
+          if (scanMetadata.scanners.openRedirect.findingsCount === 0) log('[PAYLOAD] No open redirect vulnerabilities detected across all pages.');
+
         } catch (err) {
-          log(`[ERROR] XSS scanner failed: ${err.message}`);
-          scanMetadata.errors.push({ scanner: 'xss', error: err.message });
-        }
-      }
-    }
-
-    // ── Module 11: SQL Injection Error Detection ──────────────
-    if (targetType === 'domain') {
-      if (tier !== 'team') {
-        log('[INFO] 🔒 SQL Injection Testing is locked. Upgrade to Team to unlock active injection scans.');
-      } else {
-        log(`[PAYLOAD] [${elapsed()}] Sending SQL injection probes to ${targetUrl}...`);
-        try {
-          const sqliResult = await scanSQLi(targetUrl);
-          scanMetadata.scanners.sqli = sqliResult.metadata;
-
-          if (sqliResult.findings.length > 0) {
-            for (const finding of sqliResult.findings) {
-              log(`[PAYLOAD] [CRITICAL] ${finding.title}`);
-            }
-            allFindings.push(...sqliResult.findings);
-          } else {
-            log('[PAYLOAD] No SQL injection vulnerabilities detected. Query parameterization appears secure.');
-          }
-        } catch (err) {
-          log(`[ERROR] SQLi scanner failed: ${err.message}`);
-          scanMetadata.errors.push({ scanner: 'sqli', error: err.message });
-        }
-      }
-    }
-
-    // ── Module 12: Open Redirect Payload Testing ──────────────
-    if (targetType === 'domain') {
-      if (tier !== 'team') {
-        log('[INFO] 🔒 Open Redirect Testing is locked. Upgrade to Team to unlock.');
-      } else {
-        log(`[PAYLOAD] [${elapsed()}] Testing redirect parameters for open redirect at ${targetUrl}...`);
-        try {
-          const redirectResult = await scanOpenRedirect(targetUrl);
-          scanMetadata.scanners.openRedirect = redirectResult.metadata;
-
-          if (redirectResult.findings.length > 0) {
-            for (const finding of redirectResult.findings) {
-              log(`[PAYLOAD] [WARNING] ${finding.title}`);
-            }
-            allFindings.push(...redirectResult.findings);
-          } else {
-            log('[PAYLOAD] No open redirect vulnerabilities detected.');
-          }
-        } catch (err) {
-          log(`[ERROR] Open redirect scanner failed: ${err.message}`);
-          scanMetadata.errors.push({ scanner: 'openRedirect', error: err.message });
+          log(`[ERROR] Crawler failed: ${err.message}`);
+          scanMetadata.errors.push({ scanner: 'crawler', error: err.message });
         }
       }
     }
@@ -542,11 +534,12 @@ async function executeScanPipeline({ supabase, targetId, scanType, tier = 'free'
     // ══════════════════════════════════════════════════════════
     log(`[INFO] [${elapsed()}] Aggregating findings and compiling remediations...`);
 
-    // Deduplicate findings by title
+    // Deduplicate findings by title and fileName
     const seen = new Set();
     const uniqueFindings = allFindings.filter(f => {
-      if (seen.has(f.title)) return false;
-      seen.add(f.title);
+      const key = `${f.title}-${f.fileName}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
 
