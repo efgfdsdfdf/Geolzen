@@ -1054,25 +1054,22 @@ export default function App() {
       return t;
     }));
 
-    setTimeout(async () => {
-      let analystResponse = '';
-      const lowercaseUserText = userText.toLowerCase();
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vulnerability: selectedVuln,
+          chatHistory: [...selectedVuln.chatHistory, { sender: 'user', text: userText }]
+        })
+      });
 
-      if (lowercaseUserText.includes('false positive') || lowercaseUserText.includes('false-positive')) {
-        analystResponse = "Based on our passive signature mapping and package parse, this exact vulnerability version was isolated. If you have backported a manual patch, let us know and you can mark it as resolved or trigger a scan reload.";
-      } else if (lowercaseUserText.includes('exploit') || lowercaseUserText.includes('exploit code') || lowercaseUserText.includes('how to test')) {
-        if (selectedVuln.category === 'Dependency SCA') {
-          analystResponse = "For lodash CVE-2020-8203, an attacker exploits this by sending JSON requests containing properties like '__proto__.constructor.prototype.auth = true'. If your backend merges requests unsafely, this payload pollutes global prototypes.";
-        } else if (selectedVuln.category === 'Cloud Posture') {
-          analystResponse = "To test this, run: 'aws s3 api get-bucket-policy --bucket geolzen-static-assets --no-sign-request'. If it returns the policy JSON instead of an access denied error, the bucket represents public exposure.";
-        } else {
-          analystResponse = "To verify this manually, query the headers using curl: 'curl -I https://" + selectedTarget.name + "'. Check for the absence of Content-Security-Policy in the returned header stack.";
-        }
-      } else if (lowercaseUserText.includes('manually') || lowercaseUserText.includes('alternative') || lowercaseUserText.includes('manual')) {
-        analystResponse = "If you want to solve this without our auto-patch, you can follow the 'Proposed Resolution' guidelines above. For code files, verify the correct version is referenced in your lock files, then run clean installs.";
-      } else {
-        analystResponse = `I understand your question about "${selectedVuln.title}". We suggest applying our generated diff patch as it is fully tested. Let me know if you would like me to explain the remediation logic step-by-step.`;
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to get analyst response');
       }
+
+      const analystResponse = data.text;
 
       if (supabaseClient) {
         try {
@@ -1103,7 +1100,11 @@ export default function App() {
         }
         return t;
       }));
-    }, 1200);
+
+    } catch (err) {
+      console.error("[CHAT ERROR]", err);
+      // Optional fallback or error state could go here
+    }
   };
 
   const downloadPDFReport = () => {

@@ -14,6 +14,7 @@ const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const { executeScanPipeline } = require('./workers/scanOrchestrator');
+const Anthropic = require('@anthropic-ai/sdk');
 require('dotenv').config();
 
 const app = express();
@@ -43,6 +44,9 @@ const activeScans = new Map();
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+// Anthropic AI Config
+const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
 
 // ── Root & Health Check ──────────────────────────────────────────
 app.get('/', (req, res) => {
@@ -404,6 +408,49 @@ app.post('/api/targets/:id/sign-roe', async (req, res) => {
       signed_at: new Date().toISOString()
     }
   });
+});
+
+// ── Analyst Chat API (Anthropic) ──────────────────────────────────
+app.post('/api/chat', async (req, res) => {
+  const { vulnerability, chatHistory } = req.body;
+  
+  if (!vulnerability || !chatHistory) {
+    return res.status(400).json({ error: 'Missing vulnerability context or chat history' });
+  }
+  if (!anthropic) {
+    return res.status(500).json({ error: 'Anthropic API is not configured on the backend.' });
+  }
+
+  try {
+    const systemPrompt = `You are a Senior Web Security Analyst at Geolzen Security. 
+A user is asking a question about a vulnerability found on their infrastructure.
+Vulnerability Context:
+- Title: ${vulnerability.title}
+- Severity: ${vulnerability.severity}
+- Description: ${vulnerability.description}
+- Solution: ${vulnerability.solution}
+- File/Endpoint: ${vulnerability.fileName}
+
+Provide actionable, concise, and expert advice. Do not output markdown code blocks unless writing code. Keep it under 150 words.`;
+
+    const messages = chatHistory.map(msg => ({
+      role: msg.sender === 'user' ? 'user' : 'assistant',
+      content: msg.text
+    }));
+
+    const response = await anthropic.messages.create({
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 300,
+      system: systemPrompt,
+      messages: messages
+    });
+
+    const analystText = response.content[0].text;
+    return res.json({ success: true, text: analystText });
+  } catch (err) {
+    console.error('[ERROR] Anthropic API failure:', err);
+    return res.status(500).json({ error: 'Failed to generate analyst response.' });
+  }
 });
 
 // ── Scan Execution ──────────────────────────────────────────────
