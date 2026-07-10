@@ -44,7 +44,11 @@ const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-// ── Health Check ────────────────────────────────────────────────
+// ── Root & Health Check ──────────────────────────────────────────
+app.get('/', (req, res) => {
+  res.send('Geolzen Security Control Plane API is online and running successfully.');
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'operational',
