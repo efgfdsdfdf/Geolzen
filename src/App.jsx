@@ -805,7 +805,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           scanType: scanTypeSelection,
-          tier: userTier,
+          tier: orgData?.plan_tier || 'free',
           userEmail: userProfile?.email || 'user@geolzen.com',
           sendEmailAlerts: enableEmailAlerts
         })
