@@ -171,12 +171,22 @@ export default function App() {
   const exchangeRate = 1500;
   const amountInNaira = paystackConfig?.amount ? (paystackConfig.amount * exchangeRate) : 0;
 
+  // Map the internal tier name to actual Paystack Plan Codes (from env vars)
+  const getPaystackPlanCode = (tier) => {
+    if (tier === 'starter') return import.meta.env.VITE_PAYSTACK_STARTER_PLAN;
+    if (tier === 'team') return import.meta.env.VITE_PAYSTACK_TEAM_PLAN;
+    return null;
+  };
+
+  const planCode = paystackConfig ? getPaystackPlanCode(paystackConfig.plan) : null;
+
   const initializePayment = usePaystackPayment({
     reference: (new Date()).getTime().toString(),
     email: userProfile?.email || "user@geolzen.com",
     amount: amountInNaira * 100, // Paystack expects lowest currency unit (Kobo)
     publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || 'pk_test_dummy',
-    currency: 'NGN'
+    currency: 'NGN',
+    ...(planCode ? { plan: planCode } : {}) // If a Plan Code exists in .env, it makes it a recurring subscription!
   });
 
   useEffect(() => {
