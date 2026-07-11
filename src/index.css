@@ -121,6 +121,25 @@ a:hover {
   align-items: start;
 }
 
+.grid-layout-findings > * {
+  min-width: 0;
+}
+
+@media (max-width: 1150px) {
+  .grid-layout-findings {
+    grid-template-columns: minmax(250px, 1fr) minmax(400px, 2fr);
+  }
+  .copilot-panel-desktop {
+    display: none !important;
+  }
+}
+
+@media (max-width: 800px) {
+  .grid-layout-findings {
+    grid-template-columns: 1fr;
+  }
+}
+
 .grid-layout-settings {
   display: grid;
   grid-template-columns: 250px 1fr;
@@ -831,11 +850,6 @@ a:hover {
     gap: 20px;
   }
 
-  .grid-layout-findings {
-    grid-template-columns: 1fr !important;
-    gap: 20px;
-  }
-
   .grid-layout-settings {
     grid-template-columns: 1fr !important;
     gap: 24px;
@@ -867,9 +881,6 @@ a:hover {
   /* Copilot Mobile Overrides */
   .floating-copilot-btn {
     display: flex;
-  }
-  .copilot-panel-desktop {
-    display: none; /* Hide the normal grid column copilot */
   }
   .copilot-drawer-overlay {
     display: block; /* Allow it to be toggled via .open */
