@@ -444,7 +444,7 @@ Provide actionable, concise, and expert advice. Do not output markdown code bloc
     }
 
     const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-sonnet-4-5-20250929',
       max_tokens: 300,
       system: systemPrompt,
       messages: messages
