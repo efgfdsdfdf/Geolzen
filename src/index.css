@@ -312,6 +312,43 @@ a:hover {
   position: relative;
 }
 
+/* Responsive Dual-Sidebar Layout */
+@media (max-width: 800px) {
+  .desktop-sidebar {
+    display: none !important;
+  }
+  .mobile-top-bar {
+    display: flex !important;
+  }
+  .app-layout-wrapper {
+    flex-direction: column !important;
+  }
+  .main-content-area {
+    padding: 16px !important;
+  }
+}
+
+.mobile-top-bar {
+  display: none; /* Shown via media query */
+}
+
+.mobile-nav-overlay {
+  display: none;
+  position: fixed;
+  top: 60px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-main);
+  z-index: 200;
+  padding: 24px;
+  flex-direction: column;
+  gap: 12px;
+}
+.mobile-nav-overlay.open {
+  display: flex;
+}
+
 .terminal-header {
   background: #0b0c10;
   padding: 10px 16px;
