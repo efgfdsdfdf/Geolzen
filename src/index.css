@@ -125,7 +125,7 @@ a:hover {
   min-width: 0;
 }
 
-@media (max-width: 1150px) {
+@media (max-width: 1400px) {
   .grid-layout-findings {
     grid-template-columns: minmax(250px, 1fr) minmax(400px, 2fr);
   }
