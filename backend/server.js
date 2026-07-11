@@ -433,10 +433,15 @@ Vulnerability Context:
 
 Provide actionable, concise, and expert advice. Do not output markdown code blocks unless writing code. Keep it under 150 words.`;
 
-    const messages = chatHistory.map(msg => ({
+    let messages = chatHistory.map(msg => ({
       role: msg.sender === 'user' ? 'user' : 'assistant',
       content: msg.text
     }));
+
+    // Anthropic API requires the first message to be from 'user'
+    if (messages.length > 0 && messages[0].role !== 'user') {
+      messages.unshift({ role: 'user', content: 'Can you help me with this vulnerability?' });
+    }
 
     const response = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
@@ -449,7 +454,7 @@ Provide actionable, concise, and expert advice. Do not output markdown code bloc
     return res.json({ success: true, text: analystText });
   } catch (err) {
     console.error('[ERROR] Anthropic API failure:', err);
-    return res.status(500).json({ error: 'Failed to generate analyst response.' });
+    return res.status(500).json({ error: err.message || 'Failed to generate analyst response.' });
   }
 });
 
