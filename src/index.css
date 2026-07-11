@@ -1,40 +1,43 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --bg-main: #060609;
-  --bg-card: rgba(16, 17, 24, 0.75);
-  --bg-card-hover: rgba(28, 29, 40, 0.9);
-  --border-glow: rgba(255, 107, 0, 0.15);
-  --border-glow-active: rgba(255, 107, 0, 0.45);
+  --bg-main: #0e1014;
+  --bg-panel: #121417;
+  --bg-strip: #0a0b0d;
+  --bg-card: #121417;
+  --bg-card-hover: #1a1c20;
   
-  /* Severity Colors */
-  --color-critical: #ff3c3c;
-  --color-high: #ff7a00;
-  --color-medium: #ffb000;
-  --color-low: #4cd137;
-  --color-info: #00a8ff;
-  --color-success: #00e676;
+  --border-color: #2d3139;
+  --border-glow: #2d3139;
+  --border-glow-active: #4b5563;
   
-  --text-primary: #f5f6fa;
-  --text-secondary: #9fa6c9;
-  --text-muted: #52587a;
+  /* Severity Colors (flattened) */
+  --color-critical: #d73a49;
+  --color-high: #ffb86c;
+  --color-medium: #f1fa8c;
+  --color-low: #50fa7b;
+  --color-info: #8be9fd;
+  --color-success: #50fa7b;
   
-  --accent-orange: #ff6b00;
-  --accent-orange-bright: #ff9100;
-  --accent-orange-dark: #cc5200;
+  --text-primary: #ffffff;
+  --text-secondary: #8b949e;
+  --text-muted: #4b5563;
   
-  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --accent-orange: #7431ec; /* Renamed logically, mapped to purple */
+  --accent-orange-bright: #8a4efa;
+  --accent-orange-dark: #5d25c0;
+  --accent-primary: #7431ec;
   
-  --shadow-neon: 0 0 20px rgba(255, 107, 0, 0.08);
-  --shadow-neon-hover: 0 0 35px rgba(255, 107, 0, 0.22);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  
+  --shadow-neon: none;
+  --shadow-neon-hover: none;
   
   background-color: var(--bg-main);
   color: var(--text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  margin: 0;
-  padding: 0;
 }
 
 body {
@@ -42,10 +45,7 @@ body {
   padding: 0;
   min-height: 100vh;
   overflow-x: hidden;
-  background-attachment: fixed;
-  background-image: 
-    radial-gradient(circle at 10% 20%, rgba(255, 107, 0, 0.04) 0%, transparent 40%),
-    radial-gradient(circle at 90% 80%, rgba(255, 145, 0, 0.04) 0%, transparent 45%);
+  background-color: var(--bg-main);
 }
 
 /* Custom Scrollbars */
@@ -57,11 +57,11 @@ body {
   background: var(--bg-main);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 107, 0, 0.2);
+  background: #2d3139;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 107, 0, 0.5);
+  background: #4b5563;
 }
 
 /* Base resets & utilities */
@@ -82,21 +82,16 @@ a:hover {
   text-shadow: 0 0 8px rgba(255, 107, 0, 0.5);
 }
 
-/* Glassmorphism Classes */
+/* Glassmorphism replaced with Render Flat panels */
 .glass-panel {
   background: var(--bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border-glow);
-  box-shadow: var(--shadow-neon);
-  border-radius: 12px;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  transition: border-color 0.2s ease;
 }
 
 .glass-panel:hover {
   border-color: var(--border-glow-active);
-  box-shadow: var(--shadow-neon-hover);
-  background: var(--bg-card-hover);
 }
 
 /* Responsive CSS Grid System */
@@ -248,10 +243,7 @@ a:hover {
   background: rgba(255, 107, 0, 0.1);
   box-shadow: 0 0 15px rgba(255, 107, 0, 0.2);
   border-color: var(--accent-orange-bright);
-}
-
-.glow-btn-outline:active {
-  transform: translateY(1px);
+  border-color: #4b5563;
 }
 
 .glow-btn-danger {
@@ -294,40 +286,21 @@ a:hover {
 
 /* Critical, High, Med, Low badge styles */
 .badge {
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
 }
 
-.badge-critical {
-  background: rgba(255, 60, 60, 0.15);
-  color: var(--color-critical);
-  border: 1px solid rgba(255, 60, 60, 0.4);
-}
-
-.badge-high {
-  background: rgba(255, 122, 0, 0.15);
-  color: var(--color-high);
-  border: 1px solid rgba(255, 122, 0, 0.4);
-}
-
-.badge-medium {
-  background: rgba(255, 176, 0, 0.15);
-  color: var(--color-medium);
-  border: 1px solid rgba(255, 176, 0, 0.4);
-}
-
-.badge-low {
-  background: rgba(76, 209, 55, 0.15);
-  color: var(--color-low);
-  border: 1px solid rgba(76, 209, 55, 0.4);
-}
+.badge-critical { background: rgba(215, 58, 73, 0.1); color: var(--color-critical); border: 1px solid rgba(215, 58, 73, 0.2); }
+.badge-high { background: rgba(255, 184, 108, 0.1); color: var(--color-high); border: 1px solid rgba(255, 184, 108, 0.2); }
+.badge-medium { background: rgba(241, 250, 140, 0.1); color: var(--color-medium); border: 1px solid rgba(241, 250, 140, 0.2); }
+.badge-low { background: rgba(80, 250, 123, 0.1); color: var(--color-low); border: 1px solid rgba(80, 250, 123, 0.2); }
+.badge-info { background: rgba(139, 233, 253, 0.1); color: var(--color-info); border: 1px solid rgba(139, 233, 253, 0.2); }
+.badge-outline { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
 
 /* Terminal component design */
 .terminal-window {
@@ -336,9 +309,6 @@ a:hover {
   border-radius: 8px;
   font-family: var(--font-mono);
   font-size: 0.85rem;
-  color: #a0aec0;
-  box-shadow: inset 0 0 15px rgba(0,0,0,0.9);
-  overflow: hidden;
   position: relative;
 }
 
